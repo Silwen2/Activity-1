@@ -1,0 +1,126 @@
+#include <WiFi.h>
+#include <WebServer.h>
+
+const char* networkName = "Samsung A53 5G";
+const char* networkPassword = "1234567809";
+
+const int ledPins[] = {4, 5, 16, 17, 18};
+const int ledCount = sizeof(ledPins) / sizeof(ledPins[0]);
+
+WebServer webService(80);
+
+struct LEDController {
+    bool toggleMode = false;
+    bool modeA = true;
+    unsigned long lastToggle = 0;
+    const unsigned long toggleDelay = 300;
+   
+    bool sequenceActive = false;
+    unsigned long lastSequence = 0;
+    const unsigned long sequenceDelay = 300;
+    int stepIndex = 0;
+    int direction = 1;
+    const int sequenceOrder[5] = {5, 17, 16, 18, 19};
+    const int totalSteps = 5;
+} ledControl;
+
+void initializeWiFi() {
+    WiFi.begin(networkName, networkPassword);
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(1000);
+        Serial.println("Attempting WiFi Connection...");
+    }
+    Serial.println("Connected to Network: " + WiFi.localIP().toString());
+}
+
+void configureLEDs() {
+    for (int i = 0; i < ledCount; i++) {
+        pinMode(ledPins[i], OUTPUT);
+        digitalWrite(ledPins[i], LOW);
+    }
+}
+
+void switchLEDs(int state) {
+    for (int i = 0; i < ledCount; i++) {
+        digitalWrite(ledPins[i], state);
+    }
+}
+
+void mainPage() {
+    webService.send(200, "text/html", "<!DOCTYPE html><html><head><title>ESP32 LED Control</title></head><body>"
+                               "<h1>ESP32 LED Control</h1>"
+                               "<button onclick=\"fetch('/deactivate')\">Turn LEDs OFF</button><br>"
+                               "<button onclick=\"fetch('/activate')\">Turn ALL LEDs ON</button><br>"
+                               "<button onclick=\"fetch('/toggle')\">Toggle LEDs</button><br>"
+                               "<button onclick=\"fetch('/sequence')\">Sequence Mode</button><br>"
+                               "</body></html>");
+}
+
+void deactivateLEDs() {
+    ledControl.toggleMode = false;
+    ledControl.sequenceActive = false;
+    switchLEDs(LOW);
+    webService.send(200, "text/plain", "LEDs are OFF");
+}
+
+void activateLEDs() {
+    ledControl.toggleMode = false;
+    ledControl.sequenceActive = false;
+    switchLEDs(HIGH);
+    webService.send(200, "text/plain", "All LEDs are ON");
+}
+
+void startToggleMode() {
+    ledControl.toggleMode = true;
+    ledControl.sequenceActive = false;
+    ledControl.lastToggle = millis();
+    ledControl.modeA = true;
+    webService.send(200, "text/plain", "Toggle Mode Activated");
+}
+
+void startSequenceMode() {
+    ledControl.sequenceActive = true;
+    ledControl.toggleMode = false;
+    ledControl.lastSequence = millis();
+    ledControl.stepIndex = 0;
+    ledControl.direction = 1;
+    webService.send(200, "text/plain", "Sequence Mode Activated");
+}
+
+void setup() {
+    Serial.begin(115200);
+    initializeWiFi();
+    configureLEDs();
+   
+    webService.on("/", mainPage);
+    webService.on("/deactivate", deactivateLEDs);
+    webService.on("/activate", activateLEDs);
+    webService.on("/toggle", startToggleMode);
+    webService.on("/sequence", startSequenceMode);
+   
+    webService.begin();
+    Serial.println("Web Server is Online");
+}
+
+void loop() {
+    webService.handleClient();
+    unsigned long currentMillis = millis();
+   
+    if (ledControl.toggleMode && (currentMillis - ledControl.lastToggle >= ledControl.toggleDelay)) {
+        ledControl.lastToggle = currentMillis;
+        for (int i = 0; i < ledCount; i++) {
+            digitalWrite(ledPins[i], (ledControl.modeA ? (i % 2 == 0) : (i % 2 != 0)) ? HIGH : LOW);
+        }
+        ledControl.modeA = !ledControl.modeA;
+    }
+   
+    if (ledControl.sequenceActive && (currentMillis - ledControl.lastSequence >= ledControl.sequenceDelay)) {
+        ledControl.lastSequence = currentMillis;
+        switchLEDs(LOW);
+        digitalWrite(ledControl.sequenceOrder[ledControl.stepIndex], HIGH);
+        ledControl.stepIndex += ledControl.direction;
+        if (ledControl.stepIndex == ledControl.totalSteps - 1 || ledControl.stepIndex == 0) {
+            ledControl.direction *= -1;
+        }
+    }
+}
